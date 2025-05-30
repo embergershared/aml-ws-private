@@ -111,7 +111,8 @@ AddLog "Route table created: $AZFW_ROUTE_TABLE_NAME"
 # AddLog "Azure Firewall rules created for AKS"
 
 ## general internet access
-az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Http-Https-All' --name 'AppR-fqdn' --source-addresses '*' --protocols 'http=80' 'https=443'   --target-fqdns '*' --action allow --priority 110
+az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Allow-All-HttpHttps' --name 'AppR-Allow-Http' --source-addresses '*' --protocols 'http=80' --target-fqdns '*' --action allow --priority 100
+az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Allow-All-HttpHttps' --name 'AppR-Allow-Https' --source-addresses '*' --protocols 'https=443' --target-fqdns '*'
 AddLog "Azure Firewall rules created for Allow All Http + Https outbound"
 
 # 6. Associate UDR to AKS subnet

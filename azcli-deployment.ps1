@@ -67,6 +67,7 @@ $BASTION_PIP_NAME = "pip-for-bastion-${SUFFIX}"
 $KV_NAME = TrimAndRemoveTrailingHyphens -inputString "kv-${SUFFIX}" -maxLength 24
 $LAW_NAME = TrimAndRemoveTrailingHyphens -inputString "law-${SUFFIX}" -maxLength 15
 $ST_NAME = (TrimAndRemoveTrailingHyphens -inputString "st-${SUFFIX}" -maxLength 24).Replace("-", "").ToLower()
+$APPI_NAME = TrimAndRemoveTrailingHyphens -inputString "appi-${SUFFIX}" -maxLength 260
 
 $VM_NAME = TrimAndRemoveTrailingHyphens -inputString "vm-win-${SUFFIX}" -maxLength 15
 $VM_USER_PASSWORD_KV_SECRET_NAME = "${VM_NAME}-password"
@@ -227,7 +228,15 @@ az network private-endpoint dns-zone-group create `
   --zone-name default
 AddLog "Private endpoint created for Storage Account Blob: $ST_NAME"
 
-##TODO: Create App Insights, create all the Private DNS Zones + VNET links, Private endpoints.
+# Create Application Insights
+az monitor app-insights component create `
+  --app $APPI_NAME `
+  --resource-group $RG_NAME `
+  --location $LOC `
+  --kind web `
+  --application-type web `
+  --workspace $LAW_ID
+AddLog "Application Insights created: $APPI_NAME"
 
 ## Create Azure Machine Learning Workspace
 

@@ -165,6 +165,68 @@ AddLog "Diagnostic settings created for Azure Firewall: $AZFW_NAME"
 az keyvault create --name $KV_NAME --resource-group $RG_NAME
 AddLog "Key Vault created: $KV_NAME"
 
+# Create Key Vault Private DNS Zone and link it to the VNet
+az network private-dns zone create --name "privatelink.vaultcore.azure.net" --resource-group $RG_NAME
+AddLog "Private DNS Zone created for Key Vault"
+
+az network private-dns link vnet create --name "pdnslink-kv-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --zone-name "privatelink.vaultcore.azure.net" `
+  --virtual-network $VNET_NAME `
+  --registration-enabled false
+AddLog "Private DNS Zone linked to VNet: $VNET_NAME"
+
+# Create private endpoint for Key Vault
+$KV_ID = $(az keyvault show --name $KV_NAME --resource-group $RG_NAME --query id -o tsv)
+az network private-endpoint create `
+  --name "pe-kv-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --subnet $WKLD_SUBNET_NAME `
+  --private-connection-resource-id $KV_ID `
+  --group-id vault `
+  --connection-name "pe-conn-kv-${SUFFIX}"
+
+# Create DNS zone group for automatic DNS registration
+az network private-endpoint dns-zone-group create `
+  --name "pdzg-kv-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --endpoint-name "pe-kv-${SUFFIX}" `
+  --private-dns-zone "privatelink.vaultcore.azure.net" `
+  --zone-name default
+AddLog "Private endpoint created for Key Vault: $KV_NAME"
+
+# Create Storage Account Blob Private DNS Zone and link it to the VNet
+az network private-dns zone create --name "privatelink.blob.core.windows.net" --resource-group $RG_NAME
+AddLog "Private DNS Zone created for Storage Account Blob"
+
+az network private-dns link vnet create --name "pdnslink-st-blob-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --zone-name "privatelink.blob.core.windows.net" `
+  --virtual-network $VNET_NAME `
+  --registration-enabled false
+AddLog "Private DNS Zone linked to VNet for Storage Account Blob"
+
+# Create private endpoint for Storage Account Blob
+$ST_ID = $(az storage account show --name $ST_NAME --resource-group $RG_NAME --query id -o tsv)
+az network private-endpoint create `
+  --name "pe-st-blob-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --subnet $WKLD_SUBNET_NAME `
+  --private-connection-resource-id $ST_ID `
+  --group-id blob `
+  --connection-name "pe-conn-st-blob-${SUFFIX}"
+
+# Create DNS zone group for automatic DNS registration
+az network private-endpoint dns-zone-group create `
+  --name "pdzg-st-blob-${SUFFIX}" `
+  --resource-group $RG_NAME `
+  --endpoint-name "pe-st-blob-${SUFFIX}" `
+  --private-dns-zone "privatelink.blob.core.windows.net" `
+  --zone-name default
+AddLog "Private endpoint created for Storage Account Blob: $ST_NAME"
+
 ##TODO: Create App Insights, create all the Private DNS Zones + VNET links, Private endpoints.
 
 ## Create Azure Machine Learning Workspace

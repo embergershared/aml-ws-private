@@ -47,9 +47,7 @@ function GeneratePassword {
 AddLog "Functions loaded"
 
 # Sourced variables
-. \aks-values.ps1
-# $SUFFIX = ""
-# $LOC = ""
+. "$PSScriptRoot\azcli-values.ps1"
 
 # Generated variables
 $RG_NAME = "rg-${SUFFIX}"
@@ -102,15 +100,19 @@ az network route-table route create --resource-group $RG_NAME --name $AZFW_ROUTE
 az network route-table route create --resource-group $RG --name $AZFW_ROUTE_NAME_INTERNET --route-table-name $AZFW_ROUTE_TABLE_NAME --address-prefix $AZFW_PUBLIC_IP/32 --next-hop-type Internet
 AddLog "Route table created: $AZFW_ROUTE_TABLE_NAME"
 
-# 5. Add Azure Firewall rules for AKS
-az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-api-udp' --protocols 'UDP' --source-addresses '*' --destination-addresses "AzureCloud.$LOC" --destination-ports 1194 --action allow --priority 110
-az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-api-tcp' --protocols 'TCP' --source-addresses '*' --destination-addresses "AzureCloud.$LOC" --destination-ports 9000
-az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-time' --protocols 'UDP' --source-addresses '*' --destination-fqdns 'ntp.ubuntu.com' --destination-ports 123
-az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-ghcr' --protocols 'TCP' --source-addresses '*' --destination-fqdns ghcr.io pkg-containers.githubusercontent.com --destination-ports '443'
-az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-docker' --protocols 'TCP' --source-addresses '*' --destination-fqdns docker.io registry-1.docker.io production.cloudflare.docker.com --destination-ports '443'
+# 5. Add Azure Firewall rules
+# ## for AKS
+# az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-api-udp' --protocols 'UDP' --source-addresses '*' --destination-addresses "AzureCloud.$LOC" --destination-ports 1194 --action allow --priority 110
+# az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-api-tcp' --protocols 'TCP' --source-addresses '*' --destination-addresses "AzureCloud.$LOC" --destination-ports 9000
+# az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-time' --protocols 'UDP' --source-addresses '*' --destination-fqdns 'ntp.ubuntu.com' --destination-ports 123
+# az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-ghcr' --protocols 'TCP' --source-addresses '*' --destination-fqdns ghcr.io pkg-containers.githubusercontent.com --destination-ports '443'
+# az network firewall network-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'NetwRC-Aks-AzFw' --name 'NetwR-docker' --protocols 'TCP' --source-addresses '*' --destination-fqdns docker.io registry-1.docker.io production.cloudflare.docker.com --destination-ports '443'
+# az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Aks-Fw' --name 'AppR-fqdn' --source-addresses '*' --protocols 'http=80' 'https=443' --fqdn-tags "AzureKubernetesService" --action allow --priority 110
+# AddLog "Azure Firewall rules created for AKS"
 
-az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Aks-Fw' --name 'AppR-fqdn' --source-addresses '*' --protocols 'http=80' 'https=443' --fqdn-tags "AzureKubernetesService" --action allow --priority 110
-AddLog "Azure Firewall rules created for AKS"
+## general internet access
+az network firewall application-rule create --resource-group $RG_NAME --firewall-name $AZFW_NAME --collection-name 'AppRC-Http-Https-All' --name 'AppR-fqdn' --source-addresses '*' --protocols 'http=80' 'https=443'   --target-fqdns '*' --action allow --priority 110
+AddLog "Azure Firewall rules created for Allow All Http + Https outbound"
 
 # 6. Associate UDR to AKS subnet
 az network vnet subnet update --resource-group $RG_NAME --vnet-name $VNET_NAME --name $WKLD_SUBNET_NAME --route-table $AZFW_ROUTE_TABLE_NAME

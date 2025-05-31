@@ -123,8 +123,12 @@ AddLog "Route table associated to AKS subnet: $WKLD_SUBNET_NAME"
 # 7. Create Log Analytics Workspace & Storage account for logs
 az monitor log-analytics workspace create --name $LAW_NAME --resource-group $RG_NAME --sku "PerGB2018" --location $LOC
 AddLog "Log Analytics Workspace created: $LAW_NAME"
-az storage account create --name $ST_NAME --resource-group $RG_NAME --location $LOC --sku Standard_LRS
-AddLog "Log Analytics Workspace created: $ST_NAME"
+az storage account create --name $ST_NAME --resource-group $RG_NAME --location $LOC --sku Standard_LRS `
+  --allow-blob-public-access false `
+  --public-network-access Disabled `
+  --default-action Deny `
+  --min-tls-version TLS1_2
+AddLog "Storage Account created: $ST_NAME"
 
 # 8. Enable diagnostic settings for Azure Firewall
 $LAW_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query id -o tsv)
@@ -163,10 +167,15 @@ az monitor diagnostic-settings create --name "diag-st-${AZFW_NAME}" `
 AddLog "Diagnostic settings created for Azure Firewall: $AZFW_NAME"
 
 # 9. Create Azure Key Vault
-az keyvault create --name $KV_NAME --resource-group $RG_NAME
+az keyvault create --name $KV_NAME --resource-group $RG_NAME --location $LOC `
+  --enabled-for-deployment false `
+  --enabled-for-template-deployment false `
+  --enabled-for-disk-encryption true `
+  --public-network-access Disabled `
+  --network-acls '{\"default-action\":\"Deny\"}'
 AddLog "Key Vault created: $KV_NAME"
 
-# Create Key Vault Private DNS Zone and link it to the VNet
+# Create Key Vault Private DNS Zoneand link it to the VNet
 az network private-dns zone create --name "privatelink.vaultcore.azure.net" --resource-group $RG_NAME
 AddLog "Private DNS Zone created for Key Vault"
 

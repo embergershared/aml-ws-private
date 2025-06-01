@@ -89,8 +89,10 @@ AddLog "Values from azcli-values.ps1 sourced"
 
 # Generated variables
 $RG_NAME = "rg-${SUFFIX}"
+
 $VNET_NAME = "vnet-${SUFFIX}"
 $VNET_ADDRESS_PREFIX = "192.168.42.0/23"
+
 $WKLD_SUBNET_NAME = "wkld-snet"
 $WKLD_SUBNET_ADDRESS_PREFIX = "192.168.43.0/24"
 
@@ -117,6 +119,17 @@ $AML_WS_NAME = TrimAndRemoveTrailingHyphens -inputString "amlws-${SUFFIX}" -maxL
 
 $VM_NAME = TrimAndRemoveTrailingHyphens -inputString "vm-win-${SUFFIX}" -maxLength 15
 $VM_USER_PASSWORD_KV_SECRET_NAME = "${VM_NAME}-password"
+
+$ACA_ENV_NAME = TrimAndRemoveTrailingHyphens -inputString "aca-env-${SUFFIX}" -maxLength 32
+$ACA_ENV_SUBNET_NAME = "aca-snet"
+$ACA_ENV_SUBNET_ADDRESS_PREFIX = "192.168.42.192/26"
+$ACA_APP_NAME = TrimAndRemoveTrailingHyphens -inputString "aca-app-sample-${SUFFIX}" -maxLength 32
+$ACA_APP_UAI_NAME = "$ACA_APP_NAME-uai"
+
+$APP_SVC_PLAN_NAME = TrimAndRemoveTrailingHyphens -inputString "appsvc-plan-${SUFFIX}" -maxLength 32
+$FUNC_APP_NAME = TrimAndRemoveTrailingHyphens -inputString "appsvc-func-app-${SUFFIX}" -maxLength 32
+
+
 AddLog "Variables values set"
 
 
@@ -163,7 +176,13 @@ az network firewall application-rule create --resource-group $RG_NAME --firewall
 AddLog "Azure Firewall rules created for Allow All Http + Https outbound"
 
 # 6. Associate UDR to AKS subnet
-az network vnet subnet update --resource-group $RG_NAME --vnet-name $VNET_NAME --name $WKLD_SUBNET_NAME --route-table $AZFW_ROUTE_TABLE_NAME
+az network vnet subnet update `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --name $WKLD_SUBNET_NAME `
+  --route-table $AZFW_ROUTE_TABLE_NAME `
+  --delegations Microsoft.Web/serverFarms
+
 AddLog "Route table associated to AKS subnet: $WKLD_SUBNET_NAME"
 
 # 7. Create Log Analytics Workspace & Storage account for logs
@@ -399,7 +418,7 @@ az ml workspace create -g $RG_NAME `
   --public-network-access Disabled `
   --system-datastores-auth-mode identity `
   --managed-network 'allow_only_approved_outbound'
-AddLog "Azure Machine Learning Workspace created using configuration: $AML_WS_NAME"
+AddLog "Azure Machine Learning Workspace created: $AML_WS_NAME"
 
 # Create the Private Endpoint for the Azure Machine Learning Workspace
 $AML_WS_ID = $(az ml workspace show --name $AML_WS_NAME --resource-group $RG_NAME --query id -o tsv)
@@ -451,7 +470,174 @@ az role assignment create `
   --assignee-object-id $AML_UAI_PRINCIPAL_ID `
   --role "Storage File Data Privileged Contributor" `
   --scope $ST_ID
+AddLog "Role Assignments created for Azure ML Studio User-assigned managed identity: $AML_UAI_NAME"
 
 
-# 16. Create Azure Container Apps + App Service + Function App
+# 16. Create Azure Container Apps
+# Container Apps Environment => Subnet
+az network vnet subnet create `
+  --name $ACA_ENV_SUBNET_NAME `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --address-prefixes $ACA_ENV_SUBNET_ADDRESS_PREFIX
 
+az network vnet subnet update `
+  --name $ACA_ENV_SUBNET_NAME `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --delegations Microsoft.App/environments `
+  --route-table $AZFW_ROUTE_TABLE_NAME
+AddLog "Container App subnet created and updated: $ACA_ENV_SUBNET_NAME"
+
+# Container Apps Environment => Environment
+$ACA_ENV_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $ACA_ENV_SUBNET_NAME --query id -o tsv)
+$LOG_ANALYTICS_WORKSPACE_CLIENT_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query customerId -o tsv)
+$LOG_ANALYTICS_WORKSPACE_CLIENT_SECRET = $(az monitor log-analytics workspace get-shared-keys --resource-group $RG_NAME --workspace-name $LAW_NAME --query primarySharedKey -o tsv)
+
+az containerapp env create `
+  --name $ACA_ENV_NAME `
+  --resource-group $RG_NAME `
+  --location $LOC `
+  --infrastructure-resource-group "$RG_NAME-aca-env" `
+  --infrastructure-subnet-resource-id $ACA_ENV_SUBNET_ID `
+  --logs-workspace-id $LOG_ANALYTICS_WORKSPACE_CLIENT_ID `
+  --logs-workspace-key $LOG_ANALYTICS_WORKSPACE_CLIENT_SECRET `
+  --internal-only true `
+  --public-network-access Disabled
+AddLog "Container Apps Environment created: $ACA_ENV_NAME"
+
+
+# Container Apps Sample Application
+az identity create --name $ACA_APP_UAI_NAME --resource-group $RG_NAME --location $LOC
+AddLog "User-assigned managed identity created: $ACA_APP_UAI_NAME"
+
+$ACA_APP_UAI_ID = $(az identity show --name $ACA_APP_UAI_NAME --resource-group $RG_NAME --query id -o tsv)
+$ACA_ENV_ID = $(az containerapp env show --name $ACA_ENV_NAME --resource-group $RG_NAME --query id -o tsv)
+$ACR_FQDN = $(az acr show --name $ACR_NAME --resource-group $RG_NAME --query loginServer -o tsv)
+
+az containerapp create `
+  --name $ACA_APP_NAME `
+  --resource-group $RG_NAME `
+  --environment $ACA_ENV_NAME `
+  --registry-server $ACR_FQDN `
+  --registry-identity 'system' `
+  --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest `
+  --target-port 80 `
+  --ingress internal `
+  --min-replicas 0 `
+  --max-replicas 2 `
+  --env-vars "MESSAGE=Hello from private Container Apps!" `
+  --user-assigned $ACA_APP_UAI_ID `
+  --query properties.configuration.ingress.fqdn
+AddLog "Container App created: $ACA_APP_NAME"
+
+# Create private DNS zone for Container Apps
+$privateDnsZoneContainerApps = @(
+  @{
+    name         = "privatelink.azurecontainerapps.io"
+    linkName     = "aca-privdns-vnet-link"
+    resourceType = "Azure Container Apps"
+  }
+)
+
+foreach ($zone in $privateDnsZoneContainerApps) {
+  # Create Private DNS Zone
+  az network private-dns zone create `
+    --name $zone.name `
+    --resource-group $RG_NAME
+  AddLog "Private DNS Zone created for $($zone.resourceType)"
+
+  # Create VNet Link
+  az network private-dns link vnet create `
+    --name $zone.linkName `
+    --resource-group $RG_NAME `
+    --zone-name $zone.name `
+    --virtual-network $VNET_NAME `
+    --registration-enabled false
+  AddLog "Private DNS Zone linked to VNet for $($zone.resourceType)"
+}
+
+# Create private endpoint for Container Apps Environment
+CreatePrivateEndpoint -name $ACA_ENV_NAME `
+  -resourceId $ACA_ENV_ID `
+  -groupId "managedEnvironments" `
+  -dnsZoneName "privatelink.azurecontainerapps.io" `
+  -rgName $RG_NAME `
+  -vnetName $VNET_NAME `
+  -subnetName $WKLD_SUBNET_NAME
+
+
+# 17. App Service Plan + Function App
+# Create App Service Plan
+az appservice plan create `
+  --name $APP_SVC_PLAN_NAME `
+  --resource-group $RG_NAME `
+  --location $LOC `
+  --sku P1v3 `
+  --is-linux
+AddLog "App Service Plan created: $APP_SVC_PLAN_NAME"
+
+# Create Function App with .NET 8 runtime
+az functionapp create `
+  --name $FUNC_APP_NAME `
+  --resource-group $RG_NAME `
+  --storage-account $ST_NAME `
+  --plan $APP_SVC_PLAN_NAME `
+  --runtime dotnet-isolated `
+  --runtime-version 8 `
+  --functions-version 4 `
+  --app-insights $APP_INS_NAME `
+  --assign-identity "[system]" `
+  --subnet $WKLD_SUBNET_ID
+AddLog "Function App created: $FUNC_APP_NAME"
+
+# Configure Function App settings
+az functionapp config appsettings set `
+  --name $FUNC_APP_NAME `
+  --resource-group $RG_NAME `
+  --settings "WEBSITE_CONTENTOVERVNET=1" "WEBSITE_VNET_ROUTE_ALL=1" "WEBSITE_DNS_SERVER=168.63.129.16"
+AddLog "Function App settings configured for VNET integration"
+
+# Create private DNS zone for Function App
+$privateDnsZoneFunctionApp = @(
+  @{
+    name         = "privatelink.azurewebsites.net"
+    linkName     = "func-privdns-vnet-link"
+    resourceType = "Azure Function App"
+  }
+)
+
+foreach ($zone in $privateDnsZoneFunctionApp) {
+  # Create Private DNS Zone
+  az network private-dns zone create `
+    --name $zone.name `
+    --resource-group $RG_NAME
+  AddLog "Private DNS Zone created for $($zone.resourceType)"
+
+  # Create VNet Link
+  az network private-dns link vnet create `
+    --name $zone.linkName `
+    --resource-group $RG_NAME `
+    --zone-name $zone.name `
+    --virtual-network $VNET_NAME `
+    --registration-enabled false
+  AddLog "Private DNS Zone linked to VNet for $($zone.resourceType)"
+}
+
+# Create private endpoint for Function App
+$FUNC_ID = $(az functionapp show --name $FUNC_APP_NAME --resource-group $RG_NAME --query id -o tsv)
+CreatePrivateEndpoint -name $FUNC_APP_NAME `
+  -resourceId $FUNC_ID `
+  -groupId "sites" `
+  -dnsZoneName "privatelink.azurewebsites.net" `
+  -rgName $RG_NAME `
+  -vnetName $VNET_NAME `
+  -subnetName $WKLD_SUBNET_NAME
+
+# Update Function App networking config to use private endpoints
+az functionapp config access-restriction set `
+  --name $FUNC_APP_NAME `
+  --resource-group $RG_NAME `
+  --use-private-endpoints-only true `
+  --restrict-access-from-vnet true
+AddLog "Function App private endpoint and access restrictions configured"

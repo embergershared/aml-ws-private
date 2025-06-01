@@ -428,26 +428,29 @@ az network private-endpoint dns-zone-group add `
   --zone-name 'privatelink.notebooks.azure.net'
 
 
-# Create required User-assigned managed identity for Private compute instances
+# Create required User-assigned managed identity for Private Compute instances
 $AML_UAI_NAME = "$AML_WS_NAME-uai"
 az identity create --name $AML_UAI_NAME --resource-group $RG_NAME --location $LOC
-# $AML_UAI_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query id -o tsv)
-# $AML_UAI_PRINCIPAL_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query principalId -o tsv)
-# $AML_UAI_CLIENT_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query clientId -o tsv)
 AddLog "User-assigned managed identity created: $AML_UAI_NAME"
 
-# # Grant the user-assigned managed identity Contributor access to the AML workspace
-# $AML_WS_SCOPE = $(az ml workspace show --name $AML_WS_NAME --resource-group $RG_NAME --query id -o tsv)
-# az role assignment create --assignee-object-id $AML_UAI_PRINCIPAL_ID --role "Contributor" --scope $AML_WS_SCOPE
-# AddLog "Granted Contributor role to UAI on AML workspace"
 
-# # Grant the user-assigned managed identity access to Key Vault secrets
-# az keyvault set-policy --name $KV_NAME `
-#   --object-id $AML_UAI_PRINCIPAL_ID `
-#   --secret-permissions get list `
-#   --key-permissions get list `
-#   --certificate-permissions get list
-# AddLog "Granted Key Vault access policies to UAI"
+# Assign required roles to the User-assigned managed identity
+# Ref: https://learn.microsoft.com/en-us/azure/machine-learning/how-to-disable-local-auth-storage?view=azureml-api-2&tabs=portal#scenarios-for-role-assignments
+
+# $AML_UAI_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query id -o tsv)
+$AML_UAI_PRINCIPAL_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query principalId -o tsv)
+# $AML_UAI_CLIENT_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query clientId -o tsv)
+
+# Grant the user-assigned managed identity Reader access to the resource group
+az role assignment create `
+  --assignee-object-id $AML_UAI_PRINCIPAL_ID `
+  --role "Storage Blob Data Contributor" `
+  --scope $ST_ID
+
+az role assignment create `
+  --assignee-object-id $AML_UAI_PRINCIPAL_ID `
+  --role "Storage File Data Privileged Contributor" `
+  --scope $ST_ID
 
 
 # 16. Create Azure Container Apps + App Service + Function App

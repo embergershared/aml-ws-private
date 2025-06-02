@@ -138,6 +138,9 @@ $APP_SVC_PLAN_NAME = TrimAndRemoveTrailingHyphens -inputString "appsvc-plan-${SU
 $APP_SVC_ST_NAME = (TrimAndRemoveTrailingHyphens -inputString "st-appsvc-${SUFFIX}" -maxLength 24).Replace("-", "").ToLower()
 $FUNC_APP_NAME = TrimAndRemoveTrailingHyphens -inputString "appsvc-func-app-${SUFFIX}" -maxLength 32
 
+$DOCINT_NAME = TrimAndRemoveTrailingHyphens -inputString "docint-${SUFFIX}" -maxLength 32
+
+
 AddLog "Variables values set"
 
 
@@ -177,6 +180,11 @@ az network vnet subnet create `
   --vnet-name $VNET_NAME `
   --name $ACA_SUBNET_NAME `
   --address-prefix $ACA_SUBNET_ADDRESS_PREFIX
+
+$WKLD_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $WKLD_SUBNET_NAME --query id -o tsv)
+$ACA_ENV_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $ACA_ENV_SUBNET_NAME --query id -o tsv)
+$ACA_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $ACA_SUBNET_NAME --query id -o tsv)
+
 AddLog "VNet and its subnets created: $VNET_NAME"
 
 
@@ -201,13 +209,15 @@ az network firewall ip-config create `
   --name "pip-ipconfig" `
   --public-ip-address $AZFW_PUBLICIP_NAME `
   --vnet-name $VNET_NAME
+
+$AZFW_ID = $(az network firewall show --resource-group $RG_NAME --name $AZFW_NAME --query id -o tsv)
+$AZFW_PUBLIC_IP = $(az network public-ip show --resource-group $RG_NAME --name $AZFW_PUBLICIP_NAME --query "ipAddress" -o tsv)
+$AZFW_PRIVATE_IP = $(az network firewall show --resource-group $RG_NAME --name $AZFW_NAME --query "ipConfigurations[0].privateIPAddress" -o tsv)
+
 AddLog "Azure Firewall Public IP configuration created."
 
 
 # 4. Create UDR to Azure Firewall
-$AZFW_PUBLIC_IP = $(az network public-ip show --resource-group $RG_NAME --name $AZFW_PUBLICIP_NAME --query "ipAddress" -o tsv)
-$AZFW_PRIVATE_IP = $(az network firewall show --resource-group $RG_NAME --name $AZFW_NAME --query "ipConfigurations[0].privateIPAddress" -o tsv)
-
 az network route-table create `
   --resource-group $RG_NAME `
   --location $LOC `
@@ -283,6 +293,10 @@ az monitor log-analytics workspace create `
   --resource-group $RG_NAME `
   --sku "PerGB2018" `
   --location $LOC
+
+$LAW_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query id -o tsv)
+$LAW_CLIENT_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query customerId -o tsv)
+$LAW_CLIENT_KEY = $(az monitor log-analytics workspace get-shared-keys --resource-group $RG_NAME --workspace-name $LAW_NAME --query primarySharedKey -o tsv)
 AddLog "Log Analytics Workspace created: $LAW_NAME"
 
 az storage account create --name $ST_NAME --resource-group $RG_NAME --location $LOC --sku Standard_LRS `
@@ -290,12 +304,11 @@ az storage account create --name $ST_NAME --resource-group $RG_NAME --location $
   --public-network-access Disabled `
   --default-action Deny `
   --min-tls-version TLS1_2
+
+$ST_ID = $(az storage account show --resource-group $RG_NAME --name $ST_NAME --query id -o tsv)
 AddLog "Storage Account created: $ST_NAME"
 
 # 8. Enable diagnostic settings for Azure Firewall
-$LAW_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query id -o tsv)
-$AZFW_ID = $(az network firewall show --resource-group $RG_NAME --name $AZFW_NAME --query id -o tsv)
-$ST_ID = $(az storage account show --resource-group $RG_NAME --name $ST_NAME --query id -o tsv)
 
 # Create diagnostic settings for Azure Firewall - Enable all Log categories
 $diagnosticLogs = @(
@@ -397,6 +410,8 @@ az keyvault create `
   --network-acls-ips $MY_PUBLIC_IP/32 `
   --default-action 'Deny' `
   --public-network-access Enabled
+
+$KV_ID = $(az keyvault show --name $KV_NAME --resource-group $RG_NAME --query id -o tsv)
 AddLog "Key Vault created: $KV_NAME"
 
 
@@ -410,7 +425,6 @@ az keyvault secret set `
 AddLog "Key Vault secret created: $VM_USER_PASSWORD_KV_SECRET_NAME"
 
 # Create the Windows 11 VM
-$WKLD_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $WKLD_SUBNET_NAME --query id -o tsv)
 az vm create `
   --resource-group $RG_NAME `
   --name $VM_NAME `
@@ -420,11 +434,12 @@ az vm create `
   --subnet $WKLD_SUBNET_ID `
   --admin-username $VM_USER_NAME `
   --admin-password $VM_USER_PASSWORD
+
+$VM_PRIVATE_NIC_ID = $(az vm show --resource-group $RG_NAME --name $VM_NAME --query "networkProfile.networkInterfaces[0].id" -o tsv)
+$VM_PRIVATE_IP = $(az network nic show --ids $VM_PRIVATE_NIC_ID --query "ipConfigurations[0].privateIPAddress" -o tsv)
 AddLog "Windows VM created: $VM_NAME"
 
 # 11. Create Azure Firewall rules for VM
-$VM_PRIVATE_NIC_ID = $(az vm show --resource-group $RG_NAME --name $VM_NAME --query "networkProfile.networkInterfaces[0].id" -o tsv)
-$VM_PRIVATE_IP = $(az network nic show --ids $VM_PRIVATE_NIC_ID --query "ipConfigurations[0].privateIPAddress" -o tsv)
 
 # Allow VM inbound access from Public internet to internal RDP through DNAT
 az network firewall nat-rule create `
@@ -466,12 +481,14 @@ az acr create `
   --public-network-enabled false `
   --default-action Deny `
   --allow-trusted-services true
+
+$ACR_ID = $(az acr show --name $ACR_NAME --resource-group $RG_NAME --query id -o tsv)
+$ACR_FQDN = $(az acr show --name $ACR_NAME --resource-group $RG_NAME --query loginServer -o tsv)
 AddLog "Container Registry created: $ACR_NAME"
 
 
 # 13. Create Private Endpoints
 # Key Vault private endpoint
-$KV_ID = $(az keyvault show --name $KV_NAME --resource-group $RG_NAME --query id -o tsv)
 CreatePrivateEndpoint `
   -name $KV_NAME `
   -resourceId $KV_ID `
@@ -482,7 +499,6 @@ CreatePrivateEndpoint `
   -subnetName $WKLD_SUBNET_NAME
 
 # Storage Account private endpoint
-$ST_ID = $(az storage account show --name $ST_NAME --resource-group $RG_NAME --query id -o tsv)
 CreatePrivateEndpoint `
   -name $ST_NAME `
   -resourceId $ST_ID `
@@ -503,15 +519,13 @@ az monitor app-insights component create `
   --kind web `
   --application-type web `
   --workspace $LAW_ID
+
+$APP_INS_ID = $(az monitor app-insights component show --app $APP_INS_NAME --resource-group $RG_NAME --query id -o tsv)
 AddLog "Application Insights created: $APP_INS_NAME"
 
 
 # 15. Create Azure Machine Learning Workspace
 az extension add -n ml # az extension update -n ml
-
-$KV_ID = $(az keyvault show --name $KV_NAME --resource-group $RG_NAME --query id -o tsv)
-$ACR_ID = $(az acr show --name $ACR_NAME --resource-group $RG_NAME --query id -o tsv)
-$APP_INS_ID = $(az monitor app-insights component show --app $APP_INS_NAME --resource-group $RG_NAME --query id -o tsv)
 
 # Create the workspace using Azure CLI
 az ml workspace create `
@@ -526,10 +540,11 @@ az ml workspace create `
   --public-network-access Disabled `
   --system-datastores-auth-mode identity `
   --managed-network 'allow_only_approved_outbound'
+
+$AML_WS_ID = $(az ml workspace show --name $AML_WS_NAME --resource-group $RG_NAME --query id -o tsv)
 AddLog "Azure Machine Learning Workspace created: $AML_WS_NAME"
 
 # Create the Private Endpoint for the Azure Machine Learning Workspace
-$AML_WS_ID = $(az ml workspace show --name $AML_WS_NAME --resource-group $RG_NAME --query id -o tsv)
 az network private-endpoint create `
   --name "$AML_WS_NAME-pe" `
   --resource-group $RG_NAME `
@@ -558,15 +573,13 @@ az network private-endpoint dns-zone-group add `
 # Create required User-assigned managed identity for Private Compute instances
 $AML_UAI_NAME = "$AML_WS_NAME-uai"
 az identity create --name $AML_UAI_NAME --resource-group $RG_NAME --location $LOC
+
+$AML_UAI_PRINCIPAL_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query principalId -o tsv)
 AddLog "User-assigned managed identity created: $AML_UAI_NAME"
 
 
 # Assign required roles to the User-assigned managed identity
 # Ref: https://learn.microsoft.com/en-us/azure/machine-learning/how-to-disable-local-auth-storage?view=azureml-api-2&tabs=portal#scenarios-for-role-assignments
-
-# $AML_UAI_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query id -o tsv)
-$AML_UAI_PRINCIPAL_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query principalId -o tsv)
-# $AML_UAI_CLIENT_ID = $(az identity show --name $AML_UAI_NAME --resource-group $RG_NAME --query clientId -o tsv)
 
 # Grant the user-assigned managed identity Reader access to the resource group
 az role assignment create `
@@ -598,28 +611,26 @@ az network vnet subnet update `
 AddLog "Container App subnet created and updated: $ACA_ENV_SUBNET_NAME"
 
 # Container Apps Environment => Environment
-$ACA_ENV_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $ACA_ENV_SUBNET_NAME --query id -o tsv)
-$LOG_ANALYTICS_WORKSPACE_CLIENT_ID = $(az monitor log-analytics workspace show --resource-group $RG_NAME --workspace-name $LAW_NAME --query customerId -o tsv)
-$LOG_ANALYTICS_WORKSPACE_CLIENT_SECRET = $(az monitor log-analytics workspace get-shared-keys --resource-group $RG_NAME --workspace-name $LAW_NAME --query primarySharedKey -o tsv)
 
 az containerapp env create `
   --name $ACA_ENV_NAME `
   --resource-group $RG_NAME `
   --location $LOC `
   --infrastructure-subnet-resource-id $ACA_ENV_SUBNET_ID `
-  --logs-workspace-id $LOG_ANALYTICS_WORKSPACE_CLIENT_ID `
-  --logs-workspace-key $LOG_ANALYTICS_WORKSPACE_CLIENT_SECRET `
+  --logs-workspace-id $LAW_CLIENT_ID `
+  --logs-workspace-key $LAW_CLIENT_KEY `
   --internal-only true
+
+$ACA_ENV_ID = $(az containerapp env show --name $ACA_ENV_NAME --resource-group $RG_NAME --query id -o tsv)
 AddLog "Container Apps Environment created: $ACA_ENV_NAME"
 
 
 # Container Apps Sample Application
 az identity create --name $ACA_APP_UAI_NAME --resource-group $RG_NAME --location $LOC
-AddLog "User-assigned managed identity created: $ACA_APP_UAI_NAME"
 
 $ACA_APP_UAI_ID = $(az identity show --name $ACA_APP_UAI_NAME --resource-group $RG_NAME --query id -o tsv)
-$ACA_ENV_ID = $(az containerapp env show --name $ACA_ENV_NAME --resource-group $RG_NAME --query id -o tsv)
-$ACR_FQDN = $(az acr show --name $ACR_NAME --resource-group $RG_NAME --query loginServer -o tsv)
+AddLog "User-assigned managed identity created: $ACA_APP_UAI_NAME"
+
 
 az containerapp create `
   --name $ACA_APP_NAME `
@@ -691,6 +702,8 @@ az storage account create --name $APP_SVC_ST_NAME --resource-group $RG_NAME --lo
   --min-tls-version TLS1_2
 
 $APP_SVC_ST_ID = $(az storage account show --name $APP_SVC_ST_NAME --resource-group $RG_NAME --query id -o tsv)
+AddLog "App Service Storage account created: $APP_SVC_ST_NAME"
+
 CreatePrivateEndpoint `
   -name $APP_SVC_ST_NAME `
   -resourceId $APP_SVC_ST_ID `
@@ -702,7 +715,6 @@ CreatePrivateEndpoint `
 
 
 # Create Function App with .NET 8 runtime
-$ACA_SUBNET_ID = $(az network vnet subnet show --resource-group $RG_NAME --vnet-name $VNET_NAME --name $ACA_SUBNET_NAME --query id -o tsv)
 az functionapp create `
   --name $FUNC_APP_NAME `
   --resource-group $RG_NAME `
@@ -715,6 +727,8 @@ az functionapp create `
   --assign-identity "[system]" `
   --vnet $VNET_NAME `
   --subnet $ACA_SUBNET_NAME
+
+$FUNC_ID = $(az functionapp show --name $FUNC_APP_NAME --resource-group $RG_NAME --query id -o tsv)
 AddLog "Function App created: $FUNC_APP_NAME"
 
 # Configure Function App settings
@@ -751,7 +765,6 @@ foreach ($zone in $privateDnsZoneFunctionApp) {
 }
 
 # Create private endpoint for Function App
-$FUNC_ID = $(az functionapp show --name $FUNC_APP_NAME --resource-group $RG_NAME --query id -o tsv)
 CreatePrivateEndpoint -name $FUNC_APP_NAME `
   -resourceId $FUNC_ID `
   -groupId "sites" `
@@ -766,3 +779,69 @@ az functionapp config access-restriction set `
   --resource-group $RG_NAME `
   --use-same-restrictions-for-scm-site true
 AddLog "Function App private endpoint and access restrictions configured"
+
+
+# 18. Private Document Intelligence
+# az cognitiveservices account list-kinds
+# az cognitiveservices account list-skus -o table
+
+# Create Document Intelligence service with private networking
+az cognitiveservices account create `
+  --name $DOCINT_NAME `
+  --resource-group $RG_NAME `
+  --location $LOC `
+  --kind "FormRecognizer" `
+  --sku "S0" `
+  --custom-domain $DOCINT_NAME
+
+# Get the resource ID for the Document Intelligence service
+$DOC_INT_ID = $(az cognitiveservices account show `
+    --name $DOCINT_NAME `
+    --resource-group $RG_NAME `
+    --query id -o tsv)
+
+# Create a System Managed Identity
+az cognitiveservices account identity assign `
+  --name $DOCINT_NAME `
+  --resource-group $RG_NAME
+
+# Disable All networks access
+az resource update `
+  --ids $DOC_INT_ID `
+  --set properties.networkAcls="{'defaultAction':'Deny'}"
+
+az resource update `
+  --ids $DOC_INT_ID `
+  --set properties.publicNetworkAccess='Disabled'
+
+# Create private endpoint
+az network private-endpoint create `
+  --name "$DOCINT_NAME-pe" `
+  --resource-group $RG_NAME `
+  --vnet-name $VNET_NAME `
+  --subnet $WKLD_SUBNET_NAME `
+  --private-connection-resource-id $DOC_INT_ID `
+  --group-id "account" `
+  --connection-name "$DOCINT_NAME-pe-conn" `
+  --nic-name "$DOCINT_NAME-pe-nic"
+
+# Create private DNS zone for Document Intelligence
+az network private-dns zone create `
+  --resource-group $RG_NAME `
+  --name "privatelink.cognitiveservices.azure.com"
+
+# Link private DNS zone to VNET
+az network private-dns link vnet create `
+  --resource-group $RG_NAME `
+  --name "cog-svc-privdns-vnet-link" `
+  --zone-name "privatelink.cognitiveservices.azure.com" `
+  --vnet-name $VNET_NAME `
+  --registration-enabled false
+
+# Create DNS zone group for Document Intelligence private endpoint
+az network private-endpoint dns-zone-group create `
+  --name "docint-dns-zone-group" `
+  --resource-group $RG_NAME `
+  --endpoint-name "$DOCINT_NAME-pe" `
+  --private-dns-zone "privatelink.cognitiveservices.azure.com" `
+  --zone-name default

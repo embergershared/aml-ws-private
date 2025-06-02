@@ -13,6 +13,7 @@ Azure Machine Learning Studio Private deployment
 2. Add the following content to `azcli-values.ps1`:
 
 ```powershell
+$RG_NAME = "<resource group name>"
 $SUFFIX = "<resources suffix you want>"
 $LOC = "<location to use code>"
 $VM_USER_NAME = "<bogus admin user name>"
